@@ -137,6 +137,10 @@ public class DashScopeRerankService implements DocumentRerankService {
         ));
 
         int finalSize = Math.min(topK, reranked.size());
-        return new ArrayList<>(reranked.subList(0, finalSize));
+        List<VectorSearchService.SearchResult> finalResults = new ArrayList<>(reranked.subList(0, finalSize));
+        Double topScore = finalResults.isEmpty() ? null : finalResults.get(0).getRerankScore();
+        logger.info("百炼重排成功: candidates={}, returned={}, topScore={}",
+                candidates.size(), finalResults.size(), topScore);
+        return finalResults;
     }
 }
