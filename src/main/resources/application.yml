@@ -65,7 +65,13 @@ document:
 # RAG 配置
 rag:
   top-k: 3  # 检索返回的最相似文档数量
+  recall-top-k: 10  # Milvus 第一阶段召回的候选文档数量
   model: "qwen3-max"  # 大语言模型名称
+  rerank:
+    enabled: true
+    model: qwen3-rerank
+    endpoint: https://dashscope.aliyuncs.com/compatible-api/v1/reranks
+    timeout: 30
 
 # Prometheus 配置
 prometheus:

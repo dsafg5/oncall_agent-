@@ -13,6 +13,7 @@ import org.example.constant.MilvusConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -34,6 +35,15 @@ public class VectorSearchService {
     @Autowired
     private VectorEmbeddingService embeddingService;
 
+    @Autowired
+    private DocumentRerankService documentRerankService;
+
+    @Value("${rag.recall-top-k:10}")
+    private int recallTopK;
+
+    @Value("${rag.rerank.enabled:true}")
+    private boolean rerankEnabled;
+
     /**
      * 搜索相似文档
      * 
@@ -52,11 +62,12 @@ public class VectorSearchService {
             // 2. 构建搜索参数
             ensureCollectionLoaded();
 
+            int candidateCount = Math.max(topK, recallTopK);
             SearchParam searchParam = SearchParam.newBuilder()
                     .withCollectionName(MilvusConstants.MILVUS_COLLECTION_NAME)
                     .withVectorFieldName("vector")
                     .withVectors(Collections.singletonList(queryVector))
-                    .withTopK(topK)
+                    .withTopK(candidateCount)
                     .withMetricType(io.milvus.param.MetricType.L2)
                     .withOutFields(List.of("id", "content", "metadata"))
                     .withParams("{\"nprobe\":10}")
@@ -89,12 +100,25 @@ public class VectorSearchService {
             }
 
             logger.info("搜索完成, 找到 {} 个相似文档", results.size());
-            return results;
+            return rerankCandidates(query, results, topK);
 
         } catch (Exception e) {
             logger.error("搜索相似文档失败", e);
             throw new RuntimeException("搜索失败: " + e.getMessage(), e);
         }
+    }
+
+    List<SearchResult> rerankCandidates(String query, List<SearchResult> candidates, int topK) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+
+        if (!rerankEnabled) {
+            int finalSize = Math.min(topK, candidates.size());
+            return new ArrayList<>(candidates.subList(0, finalSize));
+        }
+
+        return documentRerankService.rerank(query, candidates, topK);
     }
 
     private void ensureCollectionLoaded() {
@@ -118,6 +142,7 @@ public class VectorSearchService {
         private String id;
         private String content;
         private float score;
+        private Double rerankScore;
         private String metadata;
 
     }
