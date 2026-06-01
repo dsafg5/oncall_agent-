@@ -11,6 +11,8 @@ import lombok.Getter;
 import lombok.Setter;
 import org.example.constant.MilvusConstants;
 import org.example.dto.DocumentChunk;
+import org.example.dto.DocumentExtractionResult;
+import org.example.dto.DocumentType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +44,9 @@ public class VectorIndexService {
     @Autowired
     private DocumentChunkService chunkService;
 
+    @Autowired
+    private DocumentTextExtractor documentTextExtractor;
+
     @Value("${file.upload.path}")
     private String uploadPath;
 
@@ -70,9 +75,14 @@ public class VectorIndexService {
             result.setDirectoryPath(directory.getAbsolutePath());
 
             // 获取所有支持的文件
-            File[] files = directory.listFiles((dir, name) -> 
-                name.endsWith(".txt") || name.endsWith(".md")
-            );
+            File[] files = directory.listFiles((dir, name) -> {
+                try {
+                    DocumentType.fromFilename(name);
+                    return true;
+                } catch (IllegalArgumentException e) {
+                    return false;
+                }
+            });
 
             if (files == null || files.length == 0) {
                 logger.warn("目录中没有找到支持的文件: {}", targetPath);
@@ -131,16 +141,18 @@ public class VectorIndexService {
 
         logger.info("开始索引文件: {}", path);
 
-        // 1. 读取文件内容
-        String content = Files.readString(path);
-        logger.info("读取文件: {}, 内容长度: {} 字符", path, content.length());
+        // 1. Extract text according to document type.
+        DocumentExtractionResult extractionResult = documentTextExtractor.extract(path);
+        DocumentType documentType = extractionResult.getDocumentType();
+        String content = extractionResult.getContent();
+        logger.info("读取文件完成: {}, type={}, 内容长度: {} 字符", path, documentType, content.length());
 
         // 2. 删除该文件的旧数据（如果存在）
         deleteExistingData(path.toString());
 
-        // 3. 文档分片
-        List<DocumentChunk> chunks = chunkService.chunkDocument(content, path.toString());
-        logger.info("文档分片完成: {} -> {} 个分片", filePath, chunks.size());
+        // 3. Chunk using the strategy that matches the document type.
+        List<DocumentChunk> chunks = chunkService.chunkDocument(content, path.toString(), documentType);
+        logger.info("文档分片完成: {}, type={}, chunks={}", filePath, documentType, chunks.size());
 
         // 4. 为每个分片生成向量并插入 Milvus
         for (int i = 0; i < chunks.size(); i++) {
@@ -151,7 +163,7 @@ public class VectorIndexService {
                 List<Float> vector = embeddingService.generateEmbedding(chunk.getContent());
 
                 // 构建元数据（包含文件信息）
-                Map<String, Object> metadata = buildMetadata(path.toString(), chunk, chunks.size());
+                Map<String, Object> metadata = buildMetadata(path.toString(), chunk, chunks.size(), documentType);
 
                 // 插入到 Milvus
                 insertToMilvus(chunk.getContent(), vector, metadata, chunk.getChunkIndex());
@@ -217,7 +229,7 @@ public class VectorIndexService {
     /**
      * 构建元数据（包含文件信息）
      */
-    private Map<String, Object> buildMetadata(String filePath, DocumentChunk chunk, int totalChunks) {
+    private Map<String, Object> buildMetadata(String filePath, DocumentChunk chunk, int totalChunks, DocumentType documentType) {
         Map<String, Object> metadata = new HashMap<>();
         
         // 标准化路径：使用统一的路径分隔符（正斜杠）用于存储，确保跨平台一致性
@@ -236,6 +248,7 @@ public class VectorIndexService {
         metadata.put("_source", normalizedPath);
         metadata.put("_extension", extension);
         metadata.put("_file_name", fileNameStr);
+        metadata.put("_document_type", documentType.name());
         
         // 分片信息
         metadata.put("chunkIndex", chunk.getChunkIndex());
